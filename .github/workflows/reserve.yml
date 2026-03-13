@@ -125,17 +125,8 @@ jobs:
             msg_body="$(tail -n 80 "$log_file")"
           fi
 
-          text_msg=$(
-            cat <<EOF
-【抢座关键日志】
-用户: ${USER_NAME}
-仓库: ${GITHUB_REPOSITORY}
-运行ID: ${GITHUB_RUN_ID}
-运行链接: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-
-${msg_body}
-EOF
-          )
+          text_msg="$(printf '【抢座关键日志】\n用户: %s\n仓库: %s\n运行ID: %s\n运行链接: https://github.com/%s/actions/runs/%s\n\n%s' \
+            "$USER_NAME" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$msg_body")"
 
           payload="$(printf '%s' "$text_msg" | jq -Rs '{msg_type:"text",content:{text:.}}')"
           status_code="$(curl -sS -o /tmp/feishu_resp.txt -w '%{http_code}' -X POST "$webhook" -H 'Content-Type: application/json' -d "$payload" || true)"
@@ -177,16 +168,8 @@ EOF
             exit 0
           fi
 
-          text_msg=$(
-            cat <<EOF
-【抢座关键日志】
-飞书连通性测试成功候选
-仓库: ${GITHUB_REPOSITORY}
-运行ID: ${GITHUB_RUN_ID}
-运行链接: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-测试模式: test_feishu_only=${{ github.event.inputs.test_feishu_only || 'false' }}
-EOF
-          )
+          text_msg="$(printf '【抢座关键日志】\n飞书连通性测试成功候选\n仓库: %s\n运行ID: %s\n运行链接: https://github.com/%s/actions/runs/%s\n测试模式: test_feishu_only=%s' \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "${{ github.event.inputs.test_feishu_only || 'false' }}")"
 
           payload="$(printf '%s' "$text_msg" | jq -Rs '{msg_type:"text",content:{text:.}}')"
           status_code="$(curl -sS -o /tmp/feishu_resp_test.txt -w '%{http_code}' -X POST "$webhook" -H 'Content-Type: application/json' -d "$payload" || true)"
@@ -263,17 +246,8 @@ EOF
             msg_body="$(tail -n 80 "$log_file")"
           fi
 
-          text_msg=$(
-            cat <<EOF
-【抢座关键日志】
-用户: ${USER_NAME}
-仓库: ${GITHUB_REPOSITORY}
-运行ID: ${GITHUB_RUN_ID}
-运行链接: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-
-${msg_body}
-EOF
-          )
+          text_msg="$(printf '【抢座关键日志】\n用户: %s\n仓库: %s\n运行ID: %s\n运行链接: https://github.com/%s/actions/runs/%s\n\n%s' \
+            "$USER_NAME" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$msg_body")"
 
           payload="$(printf '%s' "$text_msg" | jq -Rs '{msg_type:"text",content:{text:.}}')"
           status_code="$(curl -sS -o /tmp/feishu_resp.txt -w '%{http_code}' -X POST "$webhook" -H 'Content-Type: application/json' -d "$payload" || true)"
