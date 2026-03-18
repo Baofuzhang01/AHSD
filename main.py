@@ -263,7 +263,6 @@ def _burst_shot_worker(
     logging.info(
         f"[burst] Shot {index + 1} firing at {_beijing_now()} (target_dt + {offset_ms}ms)"
     )
-    not_open_retry_until = target_dt + datetime.timedelta(milliseconds=1200)
 
     if pre_token:
         token, value = pre_token, pre_value
@@ -274,8 +273,6 @@ def _burst_shot_worker(
         token, value = s._get_page_token(
             token_url,
             require_value=True,
-            not_open_retry_until=not_open_retry_until,
-            not_open_retry_interval=0.12,
         )
         if not token:
             logging.error(f"[burst] Shot {index + 1} failed to get page token")
@@ -342,7 +339,7 @@ def strategic_first_attempt(
     warm_done = False
     shared_strategy_session = None
     shared_strategy_username = None
-    not_open_retry_until = target_dt + datetime.timedelta(milliseconds=1200)
+    not_open_retry_until = target_dt + datetime.timedelta(milliseconds=1300)
 
     for index, user in enumerate(users):
         # 已经成功的配置不再参与策略尝试
@@ -716,7 +713,7 @@ def strategic_first_attempt(
                     _token_url,
                     require_value=True,
                     not_open_retry_until=not_open_retry_until,
-                    not_open_retry_interval=0.12,
+                    not_open_retry_interval=0.005,
                 )
                 if not token1:
                     logging.error("[strategic] [C] Token fetch failed, skip this config")
@@ -784,7 +781,7 @@ def strategic_first_attempt(
                     _token_url,
                     require_value=True,
                     not_open_retry_until=not_open_retry_until,
-                    not_open_retry_interval=0.12,
+                    not_open_retry_interval=0.005,
                 )
                 if not token1:
                     logging.error("[strategic] Failed to get page token for first submit, skip this config")
@@ -818,8 +815,6 @@ def strategic_first_attempt(
                 token2, value2 = s._get_page_token(
                     _token_url,
                     require_value=True,
-                    not_open_retry_until=not_open_retry_until,
-                    not_open_retry_interval=0.12,
                 )
                 if not token2:
                     logging.error("[strategic] Failed to get page token for second submit, skip to third/normal flow")
@@ -854,8 +849,6 @@ def strategic_first_attempt(
                 token3, value3 = s._get_page_token(
                     _token_url,
                     require_value=True,
-                    not_open_retry_until=not_open_retry_until,
-                    not_open_retry_interval=0.12,
                 )
                 if not token3:
                     logging.error("[strategic] Failed to get page token for third submit, give up strategic submits for this config")
