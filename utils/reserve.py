@@ -8,6 +8,7 @@ import datetime
 import os
 from urllib.parse import urlparse, parse_qs, unquote
 from urllib3.exceptions import InsecureRequestWarning
+from requests.adapters import HTTPAdapter
 
 # Load environment variables from .env file
 try:
@@ -65,6 +66,69 @@ class CredentialRejectedError(RuntimeError):
     """超星明确拒绝登录凭证时抛出，要求外层立即终止程序。"""
 
 
+class OfficeTraceHTTPAdapter(HTTPAdapter):
+    """在 send() 层记录 office.chaoxing.com 请求的连接池信息。"""
+
+    def __init__(self, owner, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.owner = owner
+
+    @staticmethod
+    def _snapshot_pool(pool, url: str) -> dict:
+        parsed = urlparse(str(url or ""))
+        return {
+            "pool_key": f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "",
+            "pool_id": hex(id(pool)) if pool is not None else "",
+            "num_connections": getattr(pool, "num_connections", None),
+            "num_requests": getattr(pool, "num_requests", None),
+        }
+
+    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None):
+        trace_context = getattr(self.owner, "_connection_trace_context", None)
+        should_trace = bool(
+            trace_context and "office.chaoxing.com" in str(getattr(request, "url", ""))
+        )
+
+        before_pool = None
+        before_state = self._snapshot_pool(None, getattr(request, "url", ""))
+        if should_trace:
+            try:
+                before_pool = self.get_connection_with_tls_context(
+                    request, verify, proxies=proxies, cert=cert
+                )
+                before_state = self._snapshot_pool(before_pool, request.url)
+            except Exception as e:
+                before_state["error"] = str(e)
+
+        response = super().send(
+            request,
+            stream=stream,
+            timeout=timeout,
+            verify=verify,
+            cert=cert,
+            proxies=proxies,
+        )
+
+        if should_trace:
+            response_pool = (
+                getattr(response.raw, "_pool", None)
+                or getattr(response.raw, "_connection", None)
+                or before_pool
+            )
+            after_state = self._snapshot_pool(response_pool, request.url)
+            trace = {
+                "kind": trace_context.get("kind", ""),
+                "method": getattr(request, "method", ""),
+                "url": getattr(request, "url", ""),
+                "status_code": getattr(response, "status_code", None),
+                "before": before_state,
+                "after": after_state,
+            }
+            self.owner._record_office_request_trace(trace)
+
+        return response
+
+
 class reserve:
     def __init__(
         self,
@@ -95,6 +159,8 @@ class reserve:
         self.submit_msg = []
         self.last_submit_result = None
         self.requests = requests.session()
+        self._office_trace_adapter = OfficeTraceHTTPAdapter(self)
+        self.requests.mount("https://office.chaoxing.com/", self._office_trace_adapter)
         self.request_timeout = (
             float(os.getenv("CX_CONNECT_TIMEOUT", "3.05")),
             float(os.getenv("CX_READ_TIMEOUT", "5")),
@@ -140,7 +206,8 @@ class reserve:
         self.enable_textclick = enable_textclick
         self.reserve_next_day = reserve_next_day
         self._captcha_context = {}
-        self._warm_pool_snapshot = {}
+        self._connection_trace_context = None
+        self._warm_request_trace = {}
         requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
     def set_captcha_context(
@@ -231,62 +298,87 @@ class reserve:
         )
         return token_matches[0] if token_matches else ""
 
-    def _get_connection_pool_state(self, url: str) -> dict:
-        """读取 requests/urllib3 连接池状态，用于判断是否复用预热连接。"""
-        try:
-            adapter = self.requests.get_adapter(url=url)
-            pool = adapter.get_connection(url)
-            parsed = urlparse(str(url or ""))
-            return {
-                "pool_key": f"{parsed.scheme}://{parsed.netloc}",
-                "num_connections": getattr(pool, "num_connections", None),
-                "num_requests": getattr(pool, "num_requests", None),
-            }
-        except Exception as e:
-            logging.debug(f"Failed to inspect connection pool state for {url}: {e}")
-            return {
-                "pool_key": "",
-                "num_connections": None,
-                "num_requests": None,
-            }
+    def _record_office_request_trace(self, trace: dict):
+        """记录发送层连接追踪信息。"""
+        kind = str(trace.get("kind", "")).strip()
+        before = trace.get("before", {}) or {}
+        after = trace.get("after", {}) or {}
 
-    def _describe_probe_connection_reuse(self, url: str, before_state: dict, after_state: dict) -> str:
-        """基于连接池计数推断轻探测是否复用了预热连接。"""
-        pool_key = after_state.get("pool_key") or before_state.get("pool_key") or ""
-        before_conn = before_state.get("num_connections")
-        after_conn = after_state.get("num_connections")
-        before_req = before_state.get("num_requests")
-        after_req = after_state.get("num_requests")
-        warm_state = self._warm_pool_snapshot.get(pool_key, {})
-        warm_conn = warm_state.get("num_connections")
+        if kind == "warm":
+            self._warm_request_trace = trace
+            logging.info(
+                "[warm] 发送层连接池追踪：连接池=%s，池对象=%s，发送前连接数=%s，请求数=%s，发送后连接数=%s，请求数=%s，状态码=%s",
+                after.get("pool_key") or before.get("pool_key") or "未知",
+                after.get("pool_id") or before.get("pool_id") or "未知",
+                before.get("num_connections"),
+                before.get("num_requests"),
+                after.get("num_connections"),
+                after.get("num_requests"),
+                trace.get("status_code"),
+            )
+            return
 
-        if not pool_key:
-            return "连接池=未知，是否复用=未知"
-
-        if isinstance(before_conn, int) and isinstance(after_conn, int):
-            if after_conn > before_conn:
-                return (
-                    f"连接池={pool_key}，是否复用=否，原因=连接数 {before_conn}->{after_conn}"
-                    f"，请求数 {before_req}->{after_req}，预热后连接数={warm_conn}"
-                )
-            if (
-                isinstance(warm_conn, int)
-                and before_conn >= warm_conn >= 1
-                and after_conn == before_conn
-            ):
-                return (
-                    f"连接池={pool_key}，是否复用=是，原因=连接数保持 {before_conn}"
-                    f"，请求数 {before_req}->{after_req}，预热后连接数={warm_conn}"
-                )
-            return (
-                f"连接池={pool_key}，是否复用=大概率是，原因=连接数保持 {before_conn}"
-                f"，请求数 {before_req}->{after_req}，预热后连接数={warm_conn}"
+        if kind == "first_fast_probe":
+            logging.info(
+                "第一枪轻探测发送层连接复用检查：%s",
+                self._describe_first_probe_reuse_from_trace(trace),
             )
 
+    def _describe_first_probe_reuse_from_trace(self, probe_trace: dict) -> str:
+        """基于发送层 trace 判断第一枪是否复用了预热连接。"""
+        warm_trace = self._warm_request_trace or {}
+        warm_after = warm_trace.get("after", {}) or {}
+        probe_before = probe_trace.get("before", {}) or {}
+        probe_after = probe_trace.get("after", {}) or {}
+
+        pool_key = (
+            probe_after.get("pool_key")
+            or probe_before.get("pool_key")
+            or warm_after.get("pool_key")
+            or "未知"
+        )
+        warm_pool_id = warm_after.get("pool_id") or ""
+        probe_pool_id = probe_after.get("pool_id") or probe_before.get("pool_id") or ""
+        warm_conn = warm_after.get("num_connections")
+        warm_req = warm_after.get("num_requests")
+        probe_before_conn = probe_before.get("num_connections")
+        probe_before_req = probe_before.get("num_requests")
+        probe_after_conn = probe_after.get("num_connections")
+        probe_after_req = probe_after.get("num_requests")
+
+        if warm_pool_id and probe_pool_id and warm_pool_id != probe_pool_id:
+            return (
+                f"连接池={pool_key}，是否复用=否，原因=预热池对象 {warm_pool_id}"
+                f" 与第一枪池对象 {probe_pool_id} 不同；预热后连接数/请求数={warm_conn}/{warm_req}"
+                f"，第一枪发送前={probe_before_conn}/{probe_before_req}，发送后={probe_after_conn}/{probe_after_req}"
+            )
+
+        if all(isinstance(v, int) for v in [warm_conn, warm_req, probe_after_conn, probe_after_req]):
+            if (
+                probe_after_conn == warm_conn
+                and probe_after_req == warm_req + 1
+                and warm_conn >= 1
+            ):
+                return (
+                    f"连接池={pool_key}，是否复用=是，原因=预热后连接数保持 {warm_conn}，"
+                    f"请求数 {warm_req}->{probe_after_req}；池对象={probe_pool_id or warm_pool_id or '未知'}"
+                )
+            if isinstance(probe_before_conn, int) and probe_after_conn > probe_before_conn:
+                return (
+                    f"连接池={pool_key}，是否复用=否，原因=第一枪发送时连接数 {probe_before_conn}->{probe_after_conn}"
+                    f" 增加；池对象={probe_pool_id or warm_pool_id or '未知'}"
+                )
+            if probe_after_conn == warm_conn and probe_after_req > warm_req:
+                return (
+                    f"连接池={pool_key}，是否复用=大概率是，原因=预热后连接数保持 {warm_conn}，"
+                    f"请求数 {warm_req}->{probe_after_req}；池对象={probe_pool_id or warm_pool_id or '未知'}"
+                )
+
         return (
-            f"连接池={pool_key}，是否复用=未知，原因=连接池计数不可用"
-            f"，连接数 {before_conn}->{after_conn}，请求数 {before_req}->{after_req}"
-            f"，预热后连接数={warm_conn}"
+            f"连接池={pool_key}，是否复用=未知，原因=发送层计数仍不足以确认；"
+            f"预热后池对象/连接数/请求数={warm_pool_id or '未知'}/{warm_conn}/{warm_req}，"
+            f"第一枪发送前={probe_before_conn}/{probe_before_req}，发送后={probe_after_conn}/{probe_after_req}，"
+            f"第一枪池对象={probe_pool_id or '未知'}"
         )
 
     def should_skip_followup_submit(self) -> bool:
@@ -351,9 +443,8 @@ class reserve:
                 "value": str,
             }
         """
-        before_pool_state = (
-            self._get_connection_pool_state(url) if log_connection_reuse else None
-        )
+        if log_connection_reuse:
+            self._connection_trace_context = {"kind": "first_fast_probe"}
         try:
             response = self._get(
                 url=url,
@@ -369,17 +460,9 @@ class reserve:
                 "treat as open and switch to formal token fetch"
             )
             return {"is_not_open": False, "token": "", "value": ""}
-
-        if log_connection_reuse:
-            after_pool_state = self._get_connection_pool_state(url)
-            logging.info(
-                "第一枪轻探测连接复用检查：%s",
-                self._describe_probe_connection_reuse(
-                    url,
-                    before_pool_state or {},
-                    after_pool_state,
-                ),
-            )
+        finally:
+            if log_connection_reuse:
+                self._connection_trace_context = None
 
         response_url = getattr(response, "url", "")
         status_code = getattr(response, "status_code", None)
@@ -538,6 +621,7 @@ class reserve:
         requests.Session 底层使用 urllib3 连接池，相同 host 的后续请求可复用已建立的连接，
         跳过 TCP 三次握手 + TLS 协商，节省约 100-200ms。
         """
+        self._connection_trace_context = {"kind": "warm"}
         try:
             logging.info(f"[warm] Start connection pre-warm request via {url}")
             self._get(
@@ -547,18 +631,10 @@ class reserve:
                 attempts=1,
                 request_name="[warm] connection pre-warm",
             )
-            pool_state = self._get_connection_pool_state(url)
-            pool_key = pool_state.get("pool_key", "")
-            if pool_key:
-                self._warm_pool_snapshot[pool_key] = pool_state
-            logging.info(
-                "[warm] 连接预热后的连接池快照：连接池=%s，连接数=%s，请求数=%s",
-                pool_key or "unknown",
-                pool_state.get("num_connections"),
-                pool_state.get("num_requests"),
-            )
         except Exception:
             pass
+        finally:
+            self._connection_trace_context = None
 
     def get_login_status(self, attempts=None):
         self.requests.headers = self.login_headers
