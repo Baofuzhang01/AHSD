@@ -22,9 +22,6 @@ from server_store.report_reserve_results import (  # noqa: E402
 )
 
 
-DEFAULT_RESULT_CENTER_URL = ""
-
-
 def load_json_text(text: str, default: Any) -> Any:
     try:
         return json.loads(text)
@@ -85,7 +82,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Parse GitHub Actions reserve.log and report result center record")
     parser.add_argument("--log", default="reserve.log")
     parser.add_argument("--payload-json", default="")
-    parser.add_argument("--center-url", default=os.getenv("RESERVE_RESULT_CENTER_URL") or DEFAULT_RESULT_CENTER_URL)
+    parser.add_argument("--center-url", default=os.getenv("RESERVE_RESULT_CENTER_URL") or "")
     parser.add_argument("--token", default=os.getenv("RESERVE_RESULT_REPORT_TOKEN") or "")
     parser.add_argument("--server-id", default=os.getenv("RESERVE_RESULT_SERVER_ID") or github_run_id() or socket.gethostname())
     parser.add_argument("--dry-run", action="store_true")

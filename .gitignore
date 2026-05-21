@@ -154,6 +154,11 @@ sync_shared_files.py
 bootstrap_new_server.sh
 deploy_qianduan_server.sh
 deploy_server.sh
+deploy_tongyi.sh
+deploy_worker2.sh
+repair_tongyi_cron.sh
+run_batch.py
+server_dispatch.py
 .sync_shared_files_cache/
 
 # Cloudflare Workers 本地缓存
@@ -162,21 +167,34 @@ workers/**/node_modules/
 
 # 验证码调试目录
 captcha_debug/
+html_debug/
 
 # 本地配置（包含敏感信息）
 config.json
 utils/config.json
 seat-qianduan.env.local
+seat-qianduan.env.example
+worker2/wrangler.toml
 utils/修改时间配置教程.docx
 utils/修改时间配置(6).docx
 
 # 本地部署记录
 DEPLOYMENT.md
+docs/tongyi_kv_schema.md
 
 # 不上传到 GitHub 的本地目录
 pageexe/
+pageexe.zip
 qianduan/
 server_runs/
 server_worker2_watchdog/
 server_store/
+!server_store/
+server_store/*
+!server_store/report_reserve_results.py
 deploy/
+worker2/
+workers/
+
+# 测试/辅助脚本
+utils/extract_plan_test.py
