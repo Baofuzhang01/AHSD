@@ -195,6 +195,7 @@ jobs:
         run: |
           dispatch_url="$(jq -r '.client_payload.server_url // ""' "$GITHUB_EVENT_PATH")"
           dispatch_api_key="$(jq -r '.client_payload.server_api_key // ""' "$GITHUB_EVENT_PATH")"
+          dispatch_operation="$(jq -r '.client_payload.emergency.mode // "execute"' "$GITHUB_EVENT_PATH")"
 
           if [[ -z "$dispatch_url" ]]; then
             echo "client_payload.server_url is required"
@@ -234,6 +235,7 @@ jobs:
           http_code="${http_code:-000}"
 
           echo "Server dispatch HTTP status: ${http_code}"
+          echo "Server dispatch operation: ${dispatch_operation}"
           echo "curl exit code: ${curl_exit_code}"
           echo "===== Server dispatch response ====="
           cat /tmp/server_dispatch_resp.txt || true
@@ -242,6 +244,7 @@ jobs:
             echo "### 服务器中转结果"
             echo
             echo "- Dispatch URL: ${dispatch_url}"
+            echo "- Operation: ${dispatch_operation}"
             echo "- HTTP Status: ${http_code}"
             echo "- curl exit code: ${curl_exit_code}"
             echo
